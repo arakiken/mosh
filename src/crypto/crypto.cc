@@ -35,7 +35,6 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <assert.h>
-#include <sys/resource.h>
 #include <fstream>
 
 #include "byteorder.h"
@@ -43,6 +42,10 @@
 #include "base64.h"
 #include "fatal_assert.h"
 #include "prng.h"
+
+#ifdef HAVE_SYS_RESOURCE_H
+#include <sys/resource.h>
+#endif
 
 using namespace std;
 using namespace Crypto;
@@ -286,11 +289,14 @@ const Message Session::decrypt( const char *str, size_t len )
   return ret;
 }
 
+#ifdef HAVE_SYS_RESOURCE_H
 static rlim_t saved_core_rlimit;
+#endif
 
 /* Disable dumping core, as a precaution to avoid saving sensitive data
    to disk. */
 void Crypto::disable_dumping_core( void ) {
+#ifdef HAVE_SYS_RESOURCE_H
   struct rlimit limit;
   if ( 0 != getrlimit( RLIMIT_CORE, &limit ) ) {
     /* We don't throw CryptoException because this is called very early
@@ -305,13 +311,16 @@ void Crypto::disable_dumping_core( void ) {
     perror( "setrlimit(RLIMIT_CORE)" );
     exit( 1 );
   }
+#endif
 }
 
 void Crypto::reenable_dumping_core( void ) {
+#ifdef HAVE_SYS_RESOURCE_H
   /* Silent failure is safe. */
   struct rlimit limit;
   if ( 0 == getrlimit( RLIMIT_CORE, &limit ) ) {
     limit.rlim_cur = saved_core_rlimit;
     setrlimit( RLIMIT_CORE, &limit );
   }
+#endif
 }

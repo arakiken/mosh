@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -37,6 +38,10 @@
 #include <limits.h>
 
 #include "terminaloverlay.h"
+
+#ifndef HAVE_WCWIDTH
+int wcwidth(wchar_t c);
+#endif
 
 using namespace Overlay;
 using std::max;
@@ -267,7 +272,8 @@ void NotificationEngine::apply( Framebuffer &fb ) const
     }
 
     wchar_t ch = *i;
-    int chwidth = ch == L'\0' ? -1 : wcwidth( ch );
+    int chwidth = ch == L'\0' ? -1 : ( Cell::isprint_iso8859_1( ch ) ? 1 :
+				       ((0xdc00 <= ch && ch <= 0xdfff) ? 0 : wcwidth( ch )) );
     Cell *this_cell = 0;
 
     switch ( chwidth ) {

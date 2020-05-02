@@ -6636,9 +6636,6 @@ if eval test \"x\$"$as_ac_Header"\" = x"yes"; then :
   cat >>confdefs.h <<_ACEOF
 #define `$as_echo "HAVE_$ac_header" | $as_tr_cpp` 1
 _ACEOF
-
-else
-  as_fn_error $? "Missing required header file." "$LINENO" 5
 fi
 
 done

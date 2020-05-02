@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -57,6 +58,28 @@ string Complete::act( const string &str )
       delete act;
     }
     actions.clear();
+
+    if ((str[i] == '\\' && (i == 0 || str[i - 1] == '\x1b')) || str[i] == '\x9c') {
+      char *chars = sixel_get_chars();
+      if (chars) {
+	while (*chars) {
+	  /* parse octet into up to three actions */
+	  parser.input( *(chars++), actions );
+
+	  /* apply actions to terminal and delete them */
+	  for ( Actions::iterator it = actions.begin();
+	  it != actions.end();
+	  it++ ) {
+	    Action *act = *it;
+	    act->act_on_terminal( &terminal );
+	    delete act;
+	  }
+	  actions.clear();
+	}
+
+	sixel_reset_chars();
+      }
+    }
   }
 
   return terminal.read_octets_to_host();
@@ -70,7 +93,8 @@ string Complete::act( const Action *act )
 }
 
 /* interface for Network::Transport */
-string Complete::diff_from( const Complete &existing ) const
+string Complete::diff_from( const Complete &existing,
+			    pass_seq_t *ps /* can be NULL (see init_diff()) */) const
 {
   HostBuffers::HostMessage output;
 
@@ -88,18 +112,60 @@ string Complete::diff_from( const Complete &existing ) const
       new_res->MutableExtension( resize )->set_height( terminal.get_fb().ds.get_height() );
     }
     string update = display.new_frame( true, existing.get_fb(), terminal.get_fb() );
+
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "DIFF\n");
+    for (int i; i < update.length(); i++) {
+      fprintf(fp, "%c", update[i]);
+    }
+    fprintf(fp, "\n");
+    fclose(fp);
+#endif
+
+    /* pass_seq_reset() is called from transportsender-impl.h */
+    size_t seq_len;
+    char *seq;
+    if (ps && (seq = pass_seq_get(ps, &seq_len))) {
+      /* Same as tick() in transportsender-impl.h */
+      if (pass_seq_has_zmodem(ps)) {
+	/* update is ignored */
+#ifdef __DEBUG
+	FILE *fp = fopen("moshlog.txt", "a");
+	fprintf(fp, "IGNORE DIFF\n");
+	fclose(fp);
+#endif
+
+	Instruction *new_inst = output.add_instruction();
+	new_inst->MutableExtension( hostbytes )->set_hoststring( seq, seq_len );
+
+	goto end;
+      } else {
+	update.insert(0, seq, seq_len);
+      }
+    }
+
     if ( !update.empty() ) {
       Instruction *new_inst = output.add_instruction();
       new_inst->MutableExtension( hostbytes )->set_hoststring( update );
     }
+  } else {
+    /* pass_seq_reset() is called from transportsender-impl.h */
+    size_t seq_len;
+    char *seq;
+    if (ps && (seq = pass_seq_get(ps, &seq_len))) {
+      Instruction *new_inst = output.add_instruction();
+      new_inst->MutableExtension( hostbytes )->set_hoststring(seq, seq_len);
+    }
   }
-  
+
+end:
   return output.SerializeAsString();
 }
 
 string Complete::init_diff( void ) const
 {
-  return diff_from( Complete( get_fb().ds.get_width(), get_fb().ds.get_height() ));
+  return diff_from( Complete( get_fb().ds.get_width(), get_fb().ds.get_height() ), NULL );
 }
 
 void Complete::apply_string( const string & diff )
@@ -214,4 +280,14 @@ bool Complete::compare( const Complete &other ) const
   /* XXX should compare other terminal state too (mouse mode, bell. etc.) */
 
   return ret;
+}
+
+std::string serialize_string( const char *str )
+{
+  HostBuffers::HostMessage output;
+
+  Instruction *new_inst = output.add_instruction();
+  new_inst->MutableExtension( hostbytes )->set_hoststring(str);
+
+  return output.SerializeAsString();
 }

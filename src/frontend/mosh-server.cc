@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -106,6 +107,73 @@ static int run_server( const char *desired_ip, const char *desired_port,
 
 using namespace std;
 
+/* for establish_tcp_connection */
+static ServerConnection *cur_network;
+
+static bool no_tcp = false;
+
+static bool tcp_recv_from_client(int sock, int pty) {
+  char buf[4096];
+  ssize_t len = recv(sock, buf, sizeof(buf), 0);
+
+  if (len > 0) {
+    do {
+#ifdef __DEBUG
+      FILE *fp = fopen("moshlog.txt", "a");
+      fprintf(fp, "Mosh client -> Mosh server -> pty via tcp (len %d)\n", len);
+      for (int i = 0; i < len; i++) {
+	fprintf(fp, "%c", buf[i]);
+      }
+      fprintf(fp, "\n");
+      fclose(fp);
+#endif
+
+      swrite(pty, buf, len);
+      len = recv(sock, buf, sizeof(buf), 0);
+    } while (len > 0);
+  }
+
+  if ((len < 0 && errno != EAGAIN && errno != EINTR) || len == 0) {
+    return false;
+  }
+
+  return true;
+}
+
+void establish_tcp_connection(int port) {
+  if (port >= 0 || cur_network->tcp_sock >= 0) {
+    return;
+  }
+
+  if (no_tcp) {
+    return;
+  }
+
+  int sock = tcp_start_server(&port);
+
+  if (sock >= 0) {
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(sock, &fds);
+
+    struct timeval tv;
+    tv.tv_usec = 0;
+    tv.tv_sec = 2;
+
+    cur_network->start_remote_tcp_connection(port);
+
+    if (select(sock + 1, &fds, NULL, NULL, &tv) == 1) {
+      cur_network->tcp_sock = tcp_client_connected(sock);
+
+      if (cur_network->tcp_sock >= 0) {
+	return;
+      }
+    }
+  }
+
+  no_tcp = true;
+}
+
 static void print_version( FILE *file )
 {
   fprintf( file, "mosh-server (%s) [build %s]\n", PACKAGE_STRING, BUILD_VERSION );
@@ -206,7 +274,7 @@ int main( int argc, char *argv[] )
        && (strcmp( argv[ 1 ], "new" ) == 0) ) {
     /* new option syntax */
     int opt;
-    while ( (opt = getopt( argc - 1, argv + 1, "@:i:p:c:svl:" )) != -1 ) {
+    while ( (opt = getopt( argc - 1, argv + 1, "@:i:p:c:stvl:" )) != -1 ) {
       switch ( opt ) {
 	/*
 	 * This undocumented option does nothing but eat its argument.
@@ -240,6 +308,9 @@ int main( int argc, char *argv[] )
 	  print_usage( stderr, argv[ 0 ] );
 	  exit( 1 );
 	}
+	break;
+      case 't':
+	no_tcp = true;
 	break;
       case 'v':
 	verbose++;
@@ -413,6 +484,8 @@ static int run_server( const char *desired_ip, const char *desired_port,
   /* open network */
   Network::UserStream blank;
   ServerConnection *network = new ServerConnection( terminal, blank, desired_ip, desired_port );
+  cur_network = network;
+  cur_ps = &network->ps;
 
   network->set_verbose( verbose );
   Select::set_verbose( verbose );
@@ -426,6 +499,8 @@ static int run_server( const char *desired_ip, const char *desired_port,
     puts( "\r\n" );
   }
   printf( "MOSH CONNECT %s %s\n", network->port().c_str(), network->get_key().c_str() );
+
+  printf( "MOSH AWIDTH %d\n", wcwidth(0x25a0) == 2 ? 2 : 1);
 
   /* don't let signals kill us */
   struct sigaction sa;
@@ -611,6 +686,12 @@ static int run_server( const char *desired_ip, const char *desired_port,
 	       e.what() );
     }
 
+    if (network->tcp_sock >= 0) {
+      closesocket(network->tcp_sock);
+      network->tcp_sock = -1;
+      pass_seq_full_reset(&network->ps);
+    }
+
     #ifdef HAVE_UTEMPTER
     utempter_remove_record( master );
     #endif
@@ -686,6 +767,10 @@ static void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &
       sel.add_fd( network_fd );
       if ( !network.shutdown_in_progress() ) {
 	sel.add_fd( host_fd );
+
+	if (network.tcp_sock >= 0) {
+	  sel.add_fd(network.tcp_sock);
+	}
       }
 
       int active_fds = sel.select( timeout );
@@ -698,7 +783,17 @@ static void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &
       uint64_t time_since_remote_state = now - network.get_latest_remote_state().timestamp;
       string terminal_to_host;
 
-      if ( sel.read( network_fd ) ) {
+      if (network.tcp_sock >= 0) {
+	if (sel.read( network.tcp_sock )) {
+	  if (!tcp_recv_from_client(network.tcp_sock, host_fd)) {
+	    closesocket(network.tcp_sock);
+	    network.tcp_sock = -1;
+	    pass_seq_full_reset(&network.ps);
+	  }
+	}
+      }
+
+      if ( sel.read( network_fd )) {
 	/* packet received from the network */
 	network.recv();
 	
@@ -725,11 +820,22 @@ static void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &
 		perror( "ioctl TIOCGWINSZ" );
 		network.start_shutdown();
 	      }
+
+	      /*
+	       * ws_xpixel and ws_ypixel are derived from ssh server in startup.
+	       *
+	       * XXX
+	       * Parser::Resize should be modified to treat ws_xpixel and ws_ypixel.
+	       */
+	      window_size.ws_xpixel = window_size.ws_xpixel * res->width / window_size.ws_col;
+	      window_size.ws_ypixel = window_size.ws_ypixel * res->height / window_size.ws_row;
 	      window_size.ws_col = res->width;
 	      window_size.ws_row = res->height;
 	      if ( ioctl( host_fd, TIOCSWINSZ, &window_size ) < 0 ) {
 		perror( "ioctl TIOCSWINSZ" );
 		network.start_shutdown();
+	      } else {
+		set_window_size(window_size);
 	      }
 	    }
 	    terminal_to_host += terminal.act( action );
@@ -791,6 +897,16 @@ static void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &
 	/* fill buffer if possible */
 	ssize_t bytes_read = read( host_fd, buf, buf_size );
 
+#ifdef __DEBUG
+	FILE *fp = fopen("moshlog.txt", "a");
+	fprintf(fp, "pty -> Mosh server %d\n", bytes_read);
+	for (int i = 0; i < bytes_read; i++) {
+	  fprintf(fp, "%c", buf[i]);
+	}
+	fprintf(fp, "\n");
+	fclose(fp);
+#endif
+
         /* If the pty slave is closed, reading from the master can fail with
            EIO (see #264).  So we treat errors on read() like EOF. */
         if ( bytes_read <= 0 ) {
@@ -802,6 +918,22 @@ static void serve( int host_fd, Terminal::Complete &terminal, ServerConnection &
 	  network.set_current_state( terminal );
 	}
       }
+
+#ifdef __DEBUG
+      if (terminal_to_host.length() > 0) {
+	static int total = 0;
+	FILE *fp = fopen("moshlog.txt", "a");
+	fprintf(fp, "Mosh server -> pty %d\n", terminal_to_host.length());
+	for (int i = 0; i < terminal_to_host.length(); i++) {
+	  fprintf(fp, "%c", terminal_to_host[i]);
+	  if (++total == 100) {
+	    fprintf(fp, "\n");
+	    total = 0;
+	  }
+	}
+	fclose(fp);
+      }
+#endif
 
       /* write user input and terminal writeback to the host */
       if ( swrite( host_fd, terminal_to_host.c_str(), terminal_to_host.length() ) < 0 ) {

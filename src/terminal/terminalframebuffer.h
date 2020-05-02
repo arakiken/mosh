@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -43,6 +44,8 @@
 #include <list>
 
 #include "shared.h"
+
+size_t convert_ucs_to_utf8(unsigned char *utf8, size_t len, uint32_t ucs_ch);
 
 /* Terminal framebuffer */
 
@@ -147,11 +150,48 @@ namespace Terminal {
 	dest.push_back( static_cast<char>(c) );
 	return;
       }
+
+#ifndef USE_WINSOCK
       static mbstate_t ps = mbstate_t();
+#endif
+
       char tmp[MB_LEN_MAX];
-      size_t ignore = wcrtomb(NULL, 0, &ps);
-      (void)ignore;
-      size_t len = wcrtomb(tmp, c, &ps);
+      size_t len;
+
+#ifndef USE_WINSOCK
+      if (sizeof(wchar_t) == 4) {
+	size_t ignore = wcrtomb(NULL, 0, &ps);
+	(void)ignore;
+	len = wcrtomb(tmp, c, &ps);
+      } else
+#endif
+      {
+	unsigned int ucs4;
+
+	if (sizeof(wchar_t) == 2) {
+	  static wchar_t prev_c;
+
+	  if (prev_c > 0) {
+	    if (0xdc00 <= c && c <= 0xdfff) {
+	      ucs4 = 0x10000 + (prev_c - 0xd800) * 0x400 + (c - 0xdc00);
+	    } else {
+	      ucs4 = c;
+	    }
+	    prev_c = 0;
+	  } else if (0xd800 <= c && c <= 0xdbff) {
+	    prev_c = c;
+
+	    return;
+	  } else {
+	    ucs4 = c;
+	  }
+	} else {
+	  ucs4 = c;
+	}
+
+	len = convert_ucs_to_utf8((unsigned char*)tmp, MB_LEN_MAX, ucs4);
+      }
+
       dest.append( tmp, len );
     }
 
@@ -162,11 +202,48 @@ namespace Terminal {
 	contents.push_back( static_cast<char>(c) );
 	return;
       }
+
+#ifndef USE_WINSOCK
       static mbstate_t ps = mbstate_t();
+#endif
+
       char tmp[MB_LEN_MAX];
-      size_t ignore = wcrtomb(NULL, 0, &ps);
-      (void)ignore;
-      size_t len = wcrtomb(tmp, c, &ps);
+      size_t len;
+
+#ifndef USE_WINSOCK
+      if (sizeof(wchar_t) == 4) {
+	size_t ignore = wcrtomb(NULL, 0, &ps);
+	(void)ignore;
+	len = wcrtomb(tmp, c, &ps);
+      } else
+#endif
+      {
+	unsigned int ucs4;
+
+	if (sizeof(wchar_t) == 2) {
+	  static wchar_t prev_c;
+
+	  if (prev_c > 0) {
+	    if (0xdc00 <= c && c <= 0xdfff) {
+	      ucs4 = 0x10000 + (prev_c - 0xd800) * 0x400 + (c - 0xdc00);
+	    } else {
+	      ucs4 = c;
+	    }
+	    prev_c = 0;
+	  } else if (0xd800 <= c && c <= 0xdbff) {
+	    prev_c = c;
+
+	    return;
+	  } else {
+	    ucs4 = c;
+	  }
+	} else {
+	  ucs4 = c;
+	}
+
+	len = convert_ucs_to_utf8((unsigned char*)tmp, MB_LEN_MAX, ucs4);
+      }
+
       contents.insert( contents.end(), tmp, tmp+len );
     }
 

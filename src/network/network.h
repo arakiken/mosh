@@ -35,8 +35,14 @@
 
 #include <stdint.h>
 #include <deque>
+#include "config.h"
+#ifndef USE_WINSOCK
 #include <sys/socket.h>
 #include <netinet/in.h>
+#else
+#include <ws2tcpip.h>
+#include <winsock2.h>
+#endif
 #include <string>
 #include <math.h>
 #include <vector>
@@ -192,11 +198,11 @@ namespace Network {
 
     Packet new_packet( const string &s_payload );
 
-    void hop_port( void );
+    void hop_port( void *ps );
 
     int sock( void ) const { assert( !socks.empty() ); return socks.back().fd(); }
 
-    void prune_sockets( void );
+    void prune_sockets( void *ps );
 
     string recv_one( int sock_to_recv, bool nonblocking );
 
@@ -209,8 +215,8 @@ namespace Network {
     Connection( const char *desired_ip, const char *desired_port ); /* server */
     Connection( const char *key_str, const char *ip, const char *port ); /* client */
 
-    void send( const string & s );
-    string recv( void );
+    void send( const string & s, void *ps );
+    string recv( void *ps );
     const std::vector< int > fds( void ) const;
     int get_MTU( void ) const { return MTU; }
 
@@ -234,5 +240,17 @@ namespace Network {
     static bool parse_portrange( const char * desired_port_range, int & desired_port_low, int & desired_port_high );
   };
 }
+
+#ifndef USE_WINSOCK
+#define closesocket(fd) close(fd)
+#else
+typedef long in_addr_t;
+#endif
+
+int tcp_connect(in_addr_t a, int port);
+
+int tcp_start_server(int *port);
+
+int tcp_client_connected(int sock);
 
 #endif

@@ -36,9 +36,18 @@
 using namespace Terminal;
 using namespace std;
 
+extern "C" {
+bool zmodem_processing(void *p);
+}
+
 string UserInput::input( const Parser::UserByte *act,
 			 bool application_mode_cursor_keys )
 {
+	/* XXX zmodem_processing(NULL) uses cur_ps. */
+  if (zmodem_processing(NULL)) {
+    return string( &act->c, 1 );
+  }
+
   /* The user will always be in application mode. If stm is not in
      application mode, convert user's cursor control function to an
      ANSI cursor control sequence */

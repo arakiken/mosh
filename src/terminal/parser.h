@@ -36,6 +36,8 @@
 /* Based on Paul Williams's parser,
    http://www.vt100.net/emu/dec_ansi_parser */
 
+#define MOSH_SIXEL
+
 #include <wchar.h>
 #include <string.h>
 

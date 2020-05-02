@@ -39,6 +39,7 @@
 #include <assert.h>
 
 #include "parseraction.h"
+#include "parserstate.h"
 
 using std::deque;
 using std::list;
@@ -88,7 +89,7 @@ namespace Network {
     
     /* interface for Network::Transport */
     void subtract( const UserStream *prefix );
-    string diff_from( const UserStream &existing ) const;
+    string diff_from( const UserStream &existing, pass_seq_t *ps ) const;
     string init_diff( void ) const { assert( false ); return string(); };
     void apply_string( const string &diff );
     bool operator==( const UserStream &x ) const { return actions == x.actions; }

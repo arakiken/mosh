@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -38,6 +39,10 @@
 
 #include "terminal.h"
 
+#ifndef HAVE_WCWIDTH
+int wcwidth(wchar_t c);
+#endif
+
 using namespace Terminal;
 
 Emulator::Emulator( size_t s_width, size_t s_height )
@@ -65,8 +70,11 @@ void Emulator::print( const Parser::Print *act )
   /*
    * Check for printing ISO 8859-1 first, it's a cheap way to detect
    * some common narrow characters.
+   * wcwidth() should not be used for surrogate pair characters.
    */
-  const int chwidth = ch == L'\0' ? -1 : ( Cell::isprint_iso8859_1( ch ) ? 1 : wcwidth( ch ));
+  const int chwidth =
+    ch == L'\0' ? -1 : ((Cell::isprint_iso8859_1(ch) || (0xd800 <= ch && ch <= 0xdbff)) ? 1 :
+			((0xdc00 <= ch && ch <= 0xdfff) ? 0 : wcwidth(ch)));
 
   Cell *this_cell = fb.get_mutable_cell();
 
@@ -125,6 +133,7 @@ void Emulator::print( const Parser::Print *act )
 	break;
       }
 
+#if 0
       if ( combining_cell->empty() ) {
 	/* cell starts with combining character */
 	/* ... but isn't necessarily the target for a new
@@ -135,6 +144,8 @@ void Emulator::print( const Parser::Print *act )
 	combining_cell->set_fallback( true );
 	fb.ds.move_col( 1, true, true );
       }
+#endif
+
       if ( !combining_cell->full() ) {
 	combining_cell->append( ch );
       }

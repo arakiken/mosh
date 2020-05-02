@@ -58,7 +58,7 @@ void UserStream::subtract( const UserStream *prefix )
   }
 }
 
-string UserStream::diff_from( const UserStream &existing ) const
+string UserStream::diff_from( const UserStream &existing, pass_seq_t *ps ) const
 {
   deque<UserEvent>::const_iterator my_it = actions.begin();
 

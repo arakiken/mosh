@@ -39,6 +39,11 @@
 
 #include "crypto.h"
 
+#include "config.h"
+#ifdef USE_WINSOCK
+#include <windows.h>
+#endif
+
 /* Read random bytes from /dev/urandom.
 
    We rely on stdio buffering for efficiency. */
@@ -63,10 +68,20 @@ class PRNG {
       return;
     }
 
+#ifndef USE_WINSOCK
     randfile.read( static_cast<char *>( dest ), size );
     if ( !randfile ) {
       throw CryptoException( "Could not read from " + std::string( rdev ) );
     }
+#else
+    HCRYPTPROV prov;
+    if (!CryptAcquireContext(&prov, NULL, NULL, PROV_RSA_FULL, 0)) {
+      throw CryptoException( "CryptAcuireContext" );
+    }
+
+    CryptGenRandom(prov, size, (BYTE*)dest);
+    CryptReleaseContext(prov, 0);
+#endif
   }
 
   uint8_t uint8() {

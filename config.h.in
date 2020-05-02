@@ -65,6 +65,10 @@
 /* Define to 1 if you have the `fork' function. */
 #undef HAVE_FORK
 
+#ifndef HAVE_FORK
+#define USE_WINSOCK
+#endif
+
 /* Define if you have forkpty(). */
 #undef HAVE_FORKPTY
 

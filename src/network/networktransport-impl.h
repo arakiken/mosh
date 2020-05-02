@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -44,34 +45,80 @@ template <class MyState, class RemoteState>
 Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState &initial_remote,
 					    const char *desired_ip, const char *desired_port )
   : connection( desired_ip, desired_port ),
-    sender( &connection, initial_state ),
+    sender( &connection, initial_state, &ps ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     receiver_quench_timer( 0 ),
     last_receiver_state( initial_remote ),
     fragments(),
-    verbose( 0 )
+    verbose( 0 ),
+    tcp_sock( -1 )
 {
   /* server */
+  memset(&ps, 0, sizeof(ps));
 }
 
 template <class MyState, class RemoteState>
 Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState &initial_remote,
 					    const char *key_str, const char *ip, const char *port )
   : connection( key_str, ip, port ),
-    sender( &connection, initial_state ),
+    sender( &connection, initial_state, &ps ),
     received_states( 1, TimestampedState<RemoteState>( timestamp(), 0, initial_remote ) ),
     receiver_quench_timer( 0 ),
     last_receiver_state( initial_remote ),
     fragments(),
-    verbose( 0 )
+    verbose( 0 ),
+    tcp_sock( -1 )
 {
   /* client */
+  memset(&ps, 0, sizeof(ps));
+}
+
+static bool tcp_recv_from_server(int sock) {
+  char buf[4096];
+  ssize_t len = recv(sock, buf, sizeof(buf), 0);
+
+  if (len > 0) {
+    static Terminal::Complete *terminal;
+
+    if (terminal == NULL) {
+      terminal = new Terminal::Complete(80, 24); /* dummy (XXX leaked) */
+    }
+
+    do {
+#ifdef __DEBUG
+      FILE *fp = fopen("moshlog.txt", "a");
+      fprintf(fp, "Mosh server -> Mosh client via tcp (len %d)\n", len);
+      for (int i = 0; i < len; i++) {
+	fprintf(fp, "%c", buf[i]);
+      }
+      fprintf(fp, "\n");
+      fclose(fp);
+#endif
+
+      string str(buf, len);
+
+      terminal->act(str);
+
+      len = recv(sock, buf, sizeof(buf), 0);
+    } while (len > 0);
+  }
+
+  if ((len < 0 &&
+#ifdef USE_WINSOCK
+       WSAGetLastError() != WSAEWOULDBLOCK &&
+#endif
+       errno != EAGAIN && errno != EINTR) ||
+      len == 0) {
+    return false;
+  }
+
+  return true;
 }
 
 template <class MyState, class RemoteState>
 void Transport<MyState, RemoteState>::recv( void )
 {
-  string s( connection.recv() );
+  string s( connection.recv(&ps) );
   Fragment frag( s );
 
   if ( fragments.add_fragment( frag ) ) { /* complete packet */
@@ -91,6 +138,11 @@ void Transport<MyState, RemoteState>::recv( void )
 	  i != received_states.end();
 	  i++ ) {
       if ( inst.new_num() == i->num ) {
+#ifdef __DEBUG
+	FILE *fp = fopen("moshlog.txt", "a");
+	fprintf(fp, "Skip recv() because we already have the new state.\n");
+	fclose(fp);
+#endif
 	return;
       }
     }
@@ -108,6 +160,11 @@ void Transport<MyState, RemoteState>::recv( void )
     
     if ( !found ) {
       //    fprintf( stderr, "Ignoring out-of-order packet. Reference state %d has been discarded or hasn't yet been received.\n", int(inst.old_num) );
+#ifdef __DEBUG
+      FILE *fp = fopen("moshlog.txt", "a");
+      fprintf(fp, "Skip recv() because the state is not found.\n");
+      fclose(fp);
+#endif
       return; /* this is security-sensitive and part of how we enforce idempotency */
     }
     
@@ -125,6 +182,12 @@ void Transport<MyState, RemoteState>::recv( void )
 	  fprintf( stderr, "[%u] Receiver queue full, discarding %d (malicious sender or long-unidirectional connectivity?)\n",
 		   (unsigned int)(timestamp() % 100000), (int)inst.new_num() );
 	}
+
+#ifdef __DEBUG
+	FILE *fp = fopen("moshlog.txt", "a");
+	fprintf(fp, "Skip recv() because receiver queue is full.\n");
+	fclose(fp);
+#endif
 	return;
       } else {
 	receiver_quench_timer = now + 15000;
@@ -137,6 +200,19 @@ void Transport<MyState, RemoteState>::recv( void )
     new_state.num = inst.new_num();
 
     if ( !inst.diff().empty() ) {
+#ifdef __DEBUG
+      FILE *fp = fopen("moshlog.txt", "a");
+      fprintf(fp, "RECVED ACKNUM %d NEW %d THROWAWAY %d\n",
+	      (int)inst.ack_num(), (int)inst.new_num(), (int)inst.throwaway_num());
+      fprintf(fp, "SIZE %d\n", inst.diff().length());
+      fprintf(fp, "(tcp sock %d)\n", tcp_sock);
+      for (int i = 0; i < inst.diff().length(); i++) {
+	fprintf(fp, "%c", inst.diff()[i]);
+      }
+      fprintf(fp, "\n");
+      fclose(fp);
+#endif
+
       new_state.state.apply_string( inst.diff() );
     }
 
@@ -189,7 +265,7 @@ string Transport<MyState, RemoteState>::get_remote_diff( void )
 {
   /* find diff between last receiver state and current remote state, then rationalize states */
 
-  string ret( received_states.back().state.diff_from( last_receiver_state ) );
+  string ret( received_states.back().state.diff_from( last_receiver_state, &ps ) );
 
   const RemoteState *oldest_receiver_state = &received_states.front().state;
 

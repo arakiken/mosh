@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -48,7 +49,8 @@ using namespace Network;
 using namespace std;
 
 template <class MyState>
-TransportSender<MyState>::TransportSender( Connection *s_connection, MyState &initial_state )
+TransportSender<MyState>::TransportSender( Connection *s_connection, MyState &initial_state,
+					   pass_seq_t *_ps )
   : connection( s_connection ), 
     current_state( initial_state ),
     sent_states( 1, TimestampedState<MyState>( timestamp(), 0, initial_state ) ),
@@ -65,7 +67,8 @@ TransportSender<MyState>::TransportSender( Connection *s_connection, MyState &in
     SEND_MINDELAY( 8 ),
     last_heard( 0 ),
     prng(),
-    mindelay_clock( -1 )
+    mindelay_clock( -1 ),
+    ps(_ps)
 {
 }
 
@@ -149,9 +152,60 @@ int TransportSender<MyState>::wait_time( void )
   }
 }
 
+template <class MyState>
+void TransportSender<MyState>::start_remote_tcp_connection( int port )
+{
+  char seq[19 + 4 + 1 + 1];
+
+  if (port < 1000 || 10000 <= port) {
+    return;
+  }
+
+  sprintf(seq, "\x1b]5379;tcp_connect %d\x07", port);
+
+  send_to_receiver(serialize_string(seq));
+}
+
+static bool tcp_send(int tcp_sock, char *buf, size_t len)
+{
+  size_t sent = 0;
+
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "Send via tcp (len %d)\n", len);
+  for (int i = 0; i < len; i++) {
+    fprintf(fp, "%c", buf[i]);
+  }
+  fprintf(fp, "\n");
+  fclose(fp);
+#endif
+
+  do {
+    ssize_t ret = send(tcp_sock, buf + sent, len - sent, 0);
+    if (ret < 0) {
+#ifdef USE_WINSOCK
+      if (WSAGetLastError() == WSAEWOULDBLOCK) {
+	usleep(1000);
+      } else
+#endif
+      if (errno != EAGAIN && errno != EINTR) {
+	return false;
+      } else {
+	usleep(1000);
+      }
+    } else {
+      sent += ret;
+    }
+  } while (sent < len);
+
+  return true;
+}
+
+void establish_tcp_connection(int port);
+
 /* Send data or an empty ack if necessary */
 template <class MyState>
-void TransportSender<MyState>::tick( void )
+void TransportSender<MyState>::tick( int *tcp_sock )
 {
   calculate_timers(); /* updates assumed receiver state and rationalizes */
 
@@ -161,16 +215,43 @@ void TransportSender<MyState>::tick( void )
 
   uint64_t now = timestamp();
 
-  if ( (now < next_ack_time)
-       && (now < next_send_time) ) {
+  size_t len;
+  char *seq = pass_seq_get(ps, &len);
+
+  if (seq) {
+    if (pass_seq_has_zmodem(ps) && *tcp_sock >= 0) {
+      if (!tcp_send(*tcp_sock, seq, len)) {
+	closesocket(*tcp_sock);
+	*tcp_sock = -1;
+
+	establish_tcp_connection(-1);
+        if (*tcp_sock < 0 || !tcp_send(*tcp_sock, seq, len)) {
+	  goto send_via_udp;
+	}
+      }
+
+      pass_seq_reset(ps);
+
+      /* Same as diff_from() in completeterminal.cc */
+      mindelay_clock = uint64_t( -1 );
+
+      return;
+    }
+  } else if (*tcp_sock >= 0 && zmodem_processing(ps)) {
+    return;
+  } else if ( (now < next_ack_time)
+	      && (now < next_send_time) ) {
     return;
   }
 
+send_via_udp:
   /* Determine if a new diff or empty ack needs to be sent */
-    
-  string diff = current_state.diff_from( assumed_receiver_state->state );
+  /* current_state is UserStream or Complete. */
+  string diff = current_state.diff_from( assumed_receiver_state->state, ps );
 
-  attempt_prospective_resend_optimization( diff );
+  if (seq == NULL) {
+    attempt_prospective_resend_optimization( diff );
+  }
 
   if ( verbose ) {
     /* verify diff has round-trip identity (modulo Unicode fallback rendering) */
@@ -196,9 +277,10 @@ void TransportSender<MyState>::tick( void )
       next_send_time = uint64_t( -1 );
       mindelay_clock = uint64_t( -1 );
     }
-  } else if ( (now >= next_send_time) || (now >= next_ack_time) ) {
+  } else if ( (now >= next_send_time) || (now >= next_ack_time) || seq ) {
     /* Send diffs or ack */
     send_to_receiver( diff );
+    pass_seq_reset(ps);
     mindelay_clock = uint64_t( -1 );
   }
 }
@@ -240,7 +322,10 @@ template <class MyState>
 void TransportSender<MyState>::send_to_receiver( const string & diff )
 {
   uint64_t new_num;
-  if ( current_state == sent_states.back().state ) { /* previously sent */
+  size_t len;
+
+  if ( current_state == sent_states.back().state /* previously sent */
+       && pass_seq_get(ps, &len) == NULL ) {
     new_num = sent_states.back().num;
   } else { /* new state */
     new_num = sent_states.back().num + 1;
@@ -250,6 +335,13 @@ void TransportSender<MyState>::send_to_receiver( const string & diff )
   if ( shutdown_in_progress ) {
     new_num = uint64_t( -1 );
   }
+
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "send_to_receiver: new num %d cur num %d\n",
+	  (int)new_num, (int)sent_states.back().num);
+  fclose(fp);
+#endif
 
   if ( new_num == sent_states.back().num ) {
     sent_states.back().timestamp = timestamp();
@@ -330,6 +422,17 @@ void TransportSender<MyState>::send_in_fragments( const string & diff, uint64_t 
   inst.set_diff( diff );
   inst.set_chaff( make_chaff() );
 
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "SEND ACKNUM %d NEW %d THROWAWAY %d\n",
+	  (int)ack_num, (int)new_num, (int)sent_states.front().num);
+  for (int i = 0; i < diff.length(); i++) {
+    fprintf(fp, "%c", diff[i]);
+  }
+  fprintf(fp, "\n");
+  fclose(fp);
+#endif
+
   if ( new_num == uint64_t(-1) ) {
     shutdown_tries++;
   }
@@ -340,7 +443,7 @@ void TransportSender<MyState>::send_in_fragments( const string & diff, uint64_t 
   for ( vector<Fragment>::iterator i = fragments.begin();
         i != fragments.end();
         i++ ) {
-    connection->send( i->tostring() );
+    connection->send( i->tostring(), ps );
 
     if ( verbose ) {
       fprintf( stderr, "[%u] Sent [%d=>%d] id %d, frag %d ack=%d, throwaway=%d, len=%d, frame rate=%.2f, timeout=%d, srtt=%.1f\n",
@@ -363,6 +466,11 @@ void TransportSender<MyState>::process_acknowledgment_through( uint64_t ack_num 
   if ( sent_states.end() !=
        find_if( sent_states.begin(), sent_states.end(),
 		bind2nd( mem_fun_ref( &TimestampedState<MyState>::num_eq ), ack_num ) ) ) {
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "Remove Sent state %d\n", (int)ack_num);
+    fclose(fp);
+#endif
     sent_states.remove_if( bind2nd( mem_fun_ref( &TimestampedState<MyState>::num_lt ), ack_num ) );
   }
 
@@ -400,7 +508,7 @@ void TransportSender<MyState>::attempt_prospective_resend_optimization( string &
     return;
   }
 
-  string resend_diff = current_state.diff_from( sent_states.front().state );
+  string resend_diff = current_state.diff_from( sent_states.front().state, ps );
 
   /* We do a prophylactic resend if it would make the diff shorter,
      or if it would lengthen it by no more than 100 bytes and still be

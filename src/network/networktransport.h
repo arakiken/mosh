@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -71,8 +72,12 @@ namespace Network {
     Transport( MyState &initial_state, RemoteState &initial_remote,
 	       const char *key_str, const char *ip, const char *port );
 
+    ~Transport() { if (tcp_sock >= 0) { closesocket(tcp_sock); } }
+
+    void start_remote_tcp_connection(int port) { sender.start_remote_tcp_connection(port); }
+
     /* Send data or an ack if necessary. */
-    void tick( void ) { sender.tick(); }
+    void tick( void ) { sender.tick(&tcp_sock); }
 
     /* Returns the number of ms to wait until next possible event. */
     int wait_time( void ) { return sender.wait_time(); }
@@ -120,6 +125,10 @@ namespace Network {
     socklen_t get_remote_addr_len( void ) const { return connection.get_remote_addr_len(); }
 
     std::string &get_send_error( void ) { return connection.get_send_error(); }
+
+    int tcp_sock;
+
+    pass_seq_t ps;
   };
 }
 

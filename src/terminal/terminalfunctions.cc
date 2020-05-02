@@ -129,7 +129,11 @@ static Function func_CSI_cursormove_f( CSI, "f", CSI_cursormove );
 /* device attributes */
 static void CSI_DA( Framebuffer *fb __attribute((unused)), Dispatcher *dispatch )
 {
+#if 0
   dispatch->terminal_to_host.append( "\033[?62c" ); /* plain vt220 */
+#else
+  dispatch->terminal_to_host.append( "\033[?63;4;22c" ); /* 4: Sixel, 22: Color */
+#endif
 }
 
 static Function func_CSI_DA( CSI, "c", CSI_DA );

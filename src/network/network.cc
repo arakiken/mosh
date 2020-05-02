@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -33,16 +34,27 @@
 #include "config.h"
 
 #include <sys/types.h>
+#ifndef USE_WINSOCK
 #include <sys/socket.h>
 #ifdef HAVE_SYS_UIO_H
 #include <sys/uio.h>
 #endif
 #include <netdb.h>
 #include <netinet/in.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mswsock.h>
+#endif
+
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#ifndef USE_WINSOCK
+#include <arpa/inet.h>
+#endif
 
 #include "dos_assert.h"
 #include "fatal_assert.h"
@@ -51,6 +63,10 @@
 #include "crypto.h"
 
 #include "timestamp.h"
+
+#ifndef MSG_NONBLOCK
+#define MSG_NONBLOCK 0
+#endif
 
 #ifndef MSG_DONTWAIT
 #define MSG_DONTWAIT MSG_NONBLOCK
@@ -66,6 +82,100 @@ using namespace Crypto;
 
 const uint64_t DIRECTION_MASK = uint64_t(1) << 63;
 const uint64_t SEQUENCE_MASK = uint64_t(-1) ^ DIRECTION_MASK;
+
+int tcp_connect(in_addr_t a, int port) {
+  int sock;
+
+  if ((sock = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "socket failed.\n");
+    fclose(fp);
+#endif
+    perror("socket");
+
+    return -1;
+  }
+
+  struct sockaddr_in addr;
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = PF_INET;
+  addr.sin_addr.s_addr = a;
+  addr.sin_port = htons(port);
+
+  if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "connect failed.\n");
+    fclose(fp);
+#endif
+    perror("connect");
+
+    closesocket(sock);
+
+    return -1;
+  }
+
+#ifdef USE_WINSOCK
+  u_long val = 1;
+  ioctlsocket(sock, FIONBIO, &val);
+#else
+  fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK);
+#endif
+
+  return sock;
+}
+
+int tcp_start_server(int *port) {
+  int sock;
+
+  if ((sock = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
+    perror("socket");
+
+    return -1;
+  }
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = PF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  for (*port = 8010; *port < 8100; (*port)++) {
+    addr.sin_port = htons(*port);
+
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+	listen(sock, 1) == 0) {
+      return sock;
+    }
+  }
+
+  closesocket(sock);
+
+  return -1;
+}
+
+int tcp_client_connected(int sock) {
+  int consock;
+  struct sockaddr_in addr;
+  socklen_t len;
+
+  if ((consock = accept(sock, (struct sockaddr *)&addr, &len)) < 0) {
+    perror("accept");
+  } else {
+#ifdef USE_WINSOCK
+    u_long val = 1;
+    ioctlsocket(consock, FIONBIO, &val);
+#else
+    fcntl(consock, F_SETFL, fcntl(consock, F_GETFL, 0) | O_NONBLOCK);
+#endif
+  }
+
+  closesocket(sock);
+
+  return consock;
+}
+
 
 /* Read in packet */
 Packet::Packet( const Message & message )
@@ -115,7 +225,7 @@ Packet Connection::new_packet( const string &s_payload )
   return p;
 }
 
-void Connection::hop_port( void )
+void Connection::hop_port( void *ps )
 {
   assert( !server );
 
@@ -123,11 +233,21 @@ void Connection::hop_port( void )
   assert( remote_addr_len != 0 );
   socks.push_back( Socket( remote_addr.sa.sa_family ) );
 
-  prune_sockets();
+  prune_sockets(ps);
 }
 
-void Connection::prune_sockets( void )
+extern "C" {
+/* defined in parserstate.h */
+bool zmodem_processing( void *ps );
+}
+
+void Connection::prune_sockets( void *ps )
 {
+  if (zmodem_processing(ps)) {
+    /* do nothing */
+    return;
+  }
+
   /* don't keep old sockets if the new socket has been working for long enough */
   if ( socks.size() > 1 ) {
     if ( timestamp() - last_port_choice > MAX_OLD_SOCKET_AGE ) {
@@ -166,7 +286,7 @@ Connection::Socket::Socket( int family )
 
   //  int dscp = 0x92; /* OS X does not have IPTOS_DSCP_AF42 constant */
   int dscp = 0x02; /* ECN-capable transport only */
-  if ( setsockopt( _fd, IPPROTO_IP, IP_TOS, &dscp, sizeof dscp ) < 0 ) {
+  if ( setsockopt( _fd, IPPROTO_IP, IP_TOS, (const char*)&dscp, sizeof dscp ) < 0 ) {
     //    perror( "setsockopt( IP_TOS )" );
   }
 
@@ -178,6 +298,13 @@ Connection::Socket::Socket( int family )
     if ( family == IPPROTO_IP ) {
       perror( "setsockopt( IP_RECVTOS )" );
     }
+  }
+#endif
+
+#ifdef USE_WINSOCK
+  int optval = 1;
+  if ( setsockopt( _fd, IPPROTO_IP, IP_PKTINFO, (const char*)&optval, sizeof(optval)) < 0) {
+    perror( "setsockopt( IP_PKTINFO )" );
   }
 #endif
 }
@@ -330,7 +457,7 @@ bool Connection::try_bind( const char *addr, int port_low, int port_high )
     if ( local_addr.sa.sa_family == AF_INET6
       && memcmp(&local_addr.sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any)) == 0 ) {
       const int off = 0;
-      if ( setsockopt( sock(), IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off) ) ) {
+      if ( setsockopt( sock(), IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&off, sizeof(off) ) ) {
         perror( "setsockopt( IPV6_V6ONLY, off )" );
       }
     }
@@ -399,7 +526,7 @@ Connection::Connection( const char *key_str, const char *ip, const char *port ) 
   set_MTU( remote_addr.sa.sa_family );
 }
 
-void Connection::send( const string & s )
+void Connection::send( const string & s, void *ps )
 {
   if ( !has_remote_addr ) {
     return;
@@ -409,8 +536,25 @@ void Connection::send( const string & s )
 
   string p = session.encrypt( px.toMessage() );
 
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "Socket status (send): size %d fd %d bytes %d port %d\n",
+	  (int)socks.size(), sock(), (int)p.size(), (int)remote_addr.sin.sin_port);
+  fclose(fp);
+#endif
+
+#ifdef USE_WINSOCK
+  u_long val = 1;
+  ioctlsocket(sock(), FIONBIO, &val);
+#endif
+
   ssize_t bytes_sent = sendto( sock(), p.data(), p.size(), MSG_DONTWAIT,
 			       &remote_addr.sa, remote_addr_len );
+
+#ifdef USE_WINSOCK
+  val = 0;
+  ioctlsocket(sock(), FIONBIO, &val);
+#endif
 
   if ( bytes_sent != static_cast<ssize_t>( p.size() ) ) {
     /* Make sendto() failure available to the frontend. */
@@ -420,6 +564,12 @@ void Connection::send( const string & s )
     if ( errno == EMSGSIZE ) {
       MTU = DEFAULT_SEND_MTU; /* payload MTU of last resort */
     }
+
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "sendto() fails. [errno %d]\n", errno);
+    fclose(fp);
+#endif
   }
 
   uint64_t now = timestamp();
@@ -431,23 +581,40 @@ void Connection::send( const string & s )
   } else { /* client */
     if ( ( now - last_port_choice > PORT_HOP_INTERVAL )
 	 && ( now - last_roundtrip_success > PORT_HOP_INTERVAL ) ) {
-      hop_port();
+      hop_port(ps);
     }
   }
 }
 
-string Connection::recv( void )
+string Connection::recv( void *ps )
 {
   assert( !socks.empty() );
+
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "Socket status (recv): size %d\n", (int)socks.size());
+  fclose(fp);
+#endif
+
   for ( std::deque< Socket >::const_iterator it = socks.begin();
 	it != socks.end();
 	it++ ) {
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "  fd %d\n", it->fd());
+    fclose(fp);
+#endif
+
     bool islast = (it + 1) == socks.end();
     string payload;
     try {
       payload = recv_one( it->fd(), !islast );
     } catch ( NetworkException & e ) {
-      if ( (e.the_errno == EAGAIN)
+      if (
+#ifdef USE_WINSOCK
+           WSAGetLastError() == WSAEWOULDBLOCK ||
+#endif
+           (e.the_errno == EAGAIN)
 	   || (e.the_errno == EWOULDBLOCK) ) {
 	assert( !islast );
 	continue;
@@ -457,7 +624,7 @@ string Connection::recv( void )
     }
 
     /* succeeded */
-    prune_sockets();
+    prune_sockets(ps);
     return payload;
   }
   assert( false );
@@ -468,43 +635,100 @@ string Connection::recv_one( int sock_to_recv, bool nonblocking )
 {
   /* receive source address, ECN, and payload in msghdr structure */
   Addr packet_remote_addr;
+#ifndef USE_WINSOCK
   struct msghdr header;
   struct iovec msg_iovec;
+#else
+  WSAMSG header;
+  WSABUF msg_iovec;
+#endif
 
   char msg_payload[ Session::RECEIVE_MTU ];
   char msg_control[ Session::RECEIVE_MTU ];
 
   /* receive source address */
+#ifndef USE_WINSOCK
   header.msg_name = &packet_remote_addr;
   header.msg_namelen = sizeof packet_remote_addr;
+#else
+  header.name = &packet_remote_addr.sa;
+  header.namelen = sizeof packet_remote_addr.sin;
+#endif
 
   /* receive payload */
+#ifndef USE_WINSOCK
   msg_iovec.iov_base = msg_payload;
   msg_iovec.iov_len = sizeof msg_payload;
   header.msg_iov = &msg_iovec;
   header.msg_iovlen = 1;
+#else
+  msg_iovec.buf = msg_payload;
+  msg_iovec.len = sizeof msg_payload;
+  header.lpBuffers = &msg_iovec;
+  header.dwBufferCount = 1;
+#endif
 
   /* receive explicit congestion notification */
+#ifndef USE_WINSOCK
   header.msg_control = msg_control;
   header.msg_controllen = sizeof msg_control;
+#else
+  header.Control.buf = msg_control;
+  header.Control.len = sizeof msg_control;
+#endif
 
   /* receive flags */
+#ifndef USE_WINSOCK
   header.msg_flags = 0;
+#else
+  header.dwFlags = 0;
+#endif
 
+#ifndef USE_WINSOCK
   ssize_t received_len = recvmsg( sock_to_recv, &header, nonblocking ? MSG_DONTWAIT : 0 );
 
   if ( received_len < 0 ) {
     throw NetworkException( "recvmsg", errno );
   }
+#else
+  static GUID guid = WSAID_WSARECVMSG;
+  static LPFN_WSARECVMSG func;
+  static DWORD nbytes;
+  if ( !func &&
+       WSAIoctl( sock_to_recv, SIO_GET_EXTENSION_FUNCTION_POINTER,
+                 &guid, sizeof(guid), &func, sizeof(func), &nbytes, NULL, NULL ) == SOCKET_ERROR ) {
+    throw NetworkException( "WSAIoctl", 1 );
+  }
 
-  if ( header.msg_flags & MSG_TRUNC ) {
+  DWORD received_len;
+  u_long val = 1;
+  ioctlsocket(sock_to_recv, FIONBIO, &val);
+  while ( (*func)( sock_to_recv, &header, &received_len, NULL, NULL ) == SOCKET_ERROR ||
+       received_len < 0 ) {
+    throw NetworkException( "WSARecvMsg", 1 );
+  }
+  val = 0;
+  ioctlsocket(sock_to_recv, FIONBIO, &val);
+#endif
+
+#ifndef USE_WINSOCK
+  if ( header.msg_flags & MSG_TRUNC )
+#else
+  if ( header.dwFlags & MSG_TRUNC )
+#endif
+  {
     throw NetworkException( "Received oversize datagram", errno );
   }
 
   /* receive ECN */
   bool congestion_experienced = false;
 
+#ifndef USE_WINSOCK
   struct cmsghdr *ecn_hdr = CMSG_FIRSTHDR( &header );
+#else
+  WSACMSGHDR *ecn_hdr = WSA_CMSG_FIRSTHDR( &header );
+#endif
+
   if ( ecn_hdr
        && (ecn_hdr->cmsg_level == IPPROTO_IP)
        && ((ecn_hdr->cmsg_type == IP_TOS)
@@ -513,7 +737,11 @@ string Connection::recv_one( int sock_to_recv, bool nonblocking )
 #endif
 	   )) {
     /* got one */
+#ifndef USE_WINSOCK
     uint8_t *ecn_octet_p = (uint8_t *)CMSG_DATA( ecn_hdr );
+#else
+    uint8_t *ecn_octet_p = (uint8_t *)WSA_CMSG_DATA( ecn_hdr );
+#endif
     assert( ecn_octet_p );
 
     if ( (*ecn_octet_p & 0x03) == 0x03 ) {
@@ -567,10 +795,19 @@ string Connection::recv_one( int sock_to_recv, bool nonblocking )
     last_heard = timestamp();
 
     if ( server ) { /* only client can roam */
-      if ( remote_addr_len != header.msg_namelen ||
+      if (
+#ifndef USE_WINSOCK
+	remote_addr_len != header.msg_namelen ||
+#else
+	remote_addr_len != header.namelen ||
+#endif
 	   memcmp( &remote_addr, &packet_remote_addr, remote_addr_len ) != 0 ) {
 	remote_addr = packet_remote_addr;
+#ifndef USE_WINSOCK
 	remote_addr_len = header.msg_namelen;
+#else
+	remote_addr_len = header.namelen;
+#endif
 	char host[ NI_MAXHOST ], serv[ NI_MAXSERV ];
 	int errcode = getnameinfo( &remote_addr.sa, remote_addr_len,
 				   host, sizeof( host ), serv, sizeof( serv ),
@@ -645,17 +882,62 @@ uint64_t Connection::timeout( void ) const
   return RTO;
 }
 
+#ifdef USE_WINSOCK
+/*
+ * XXX
+ * socks.push_back(Socket(...))
+ * => A) Socket(...)
+ *    B) Socket(A) in push_back() ... Copy _fd from A to B (See Socket(const Socket &))
+ *    C) A::~Socket() => Don't closesocket()
+ * socks.pop_back(B)
+ * => D) B::~Socket() => Do closesocket()
+ */
+static int dup_fds[16];
+static int num_dup_fds;
+#endif
+
 Connection::Socket::~Socket()
 {
+#ifndef USE_WINSOCK
   fatal_assert ( close( _fd ) == 0 );
+#else
+  for (int i = 0; i < num_dup_fds; i++) {
+    if (_fd == dup_fds[i]) {
+      dup_fds[i] = dup_fds[--num_dup_fds];
+      return;
+    }
+  }
+
+  closesocket( _fd );
+#endif
 }
 
 Connection::Socket::Socket( const Socket & other )
+#ifndef USE_WINSOCK
   : _fd( dup( other._fd ) )
+#endif
 {
+#ifndef USE_WINSOCK
   if ( _fd < 0 ) {
     throw NetworkException( "socket", errno );
   }
+#elif 0
+  HANDLE dupsock;
+  if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)other._fd, GetCurrentProcess(), &dupsock,
+       0, FALSE, 0)) {
+    throw NetworkException( "socket", errno );
+  }
+
+  _fd = (int)dupsock;
+#else
+  _fd = other._fd;
+
+  if (num_dup_fds == sizeof(dup_fds) / sizeof(dup_fds[0])) {
+    throw NetworkException( "dup_fds", 0 );
+  }
+
+  dup_fds[num_dup_fds++] = _fd;
+#endif
 }
 
 Connection::Socket & Connection::Socket::operator=( const Socket & other )
