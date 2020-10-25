@@ -223,8 +223,22 @@ static char* drcs_sixel_from_data(char *sixel, /* DCS P1;P2;P3;q...ST */ size_t 
 }
 
 static int check_pass_seq_len(size_t len) {
+  static int max_pass_seq_len = 0;
+
   if (cur_ps->s.pass_seq_len >= cur_ps->s.pass_seq_cur - cur_ps->s.pass_seq + len) {
     return 1;
+  }
+
+  if (max_pass_seq_len == 0) {
+    char *env;
+
+    if ((env = getenv("MOSH_PASS_SEQ_MAX")) == NULL || (max_pass_seq_len = atoi(env)) < 102400) {
+      max_pass_seq_len = 10240000; /* around 10MB */
+    }
+  }
+
+  if (cur_ps->s.pass_seq_len >= max_pass_seq_len) {
+    return 0;
   }
 
   if (len < 102400) {
