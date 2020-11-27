@@ -258,7 +258,7 @@ static int check_pass_seq_len(size_t len) {
   return 1;
 }
 
-static void append_str_to_pass_seq(const char *seq, size_t len) {
+void append_str_to_pass_seq(const char *seq, size_t len) {
   if (check_pass_seq_len(len)) {
     cur_ps->s.pass_seq_cur = (char*)memcpy(cur_ps->s.pass_seq_cur, seq, len) + len;
   }
@@ -272,7 +272,7 @@ static void append_char_to_pass_seq(char ch) {
 
 void establish_tcp_connection(int port);
 
-static void pass_seq_end(void) {
+void pass_seq_end(void) {
   cur_ps->s.pass_seq_beg = cur_ps->s.pass_seq_cur;
   cur_ps->s.pass_seq_ready = true;
 

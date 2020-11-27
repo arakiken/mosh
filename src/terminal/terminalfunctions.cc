@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -48,6 +49,79 @@ static void clearline( Framebuffer *fb, int row, int start, int end )
     fb->reset_cell( fb->get_mutable_cell( row, col ) );
   }
 }
+
+void append_str_to_pass_seq(const char *seq, size_t len);
+void pass_seq_end(void);
+
+static void CSI_DECRQLP( Framebuffer *fb, Dispatcher *dispatch )
+{
+  char seq[] = "\x1b[X'|";
+
+  seq[2] = dispatch->getparam( 0, 0 ) + '0';
+  append_str_to_pass_seq(seq, sizeof(seq) - 1);
+  pass_seq_end();
+}
+
+static Function func_CSI_DECRQLP( CSI, "'|", CSI_DECRQLP);
+
+static void CSI_DECSLE( Framebuffer *fb, Dispatcher *dispatch )
+{
+  append_str_to_pass_seq("\x1b[", 2);
+
+  int count = 0;
+  char seq[] = "X;";
+
+  int num = dispatch->param_count();
+  while (1) {
+    seq[0] = dispatch->getparam( count, 0 ) + '0';
+
+    if (++count < num) {
+      append_str_to_pass_seq( seq, 2 );
+    } else {
+      break;
+    }
+  }
+  append_str_to_pass_seq( seq, 1 );
+  append_str_to_pass_seq( "'{", 2 );
+  pass_seq_end();
+}
+
+static Function func_CSI_DECSLE( CSI, "'{", CSI_DECSLE );
+
+static void CSI_DECEFR( Framebuffer *fb, Dispatcher *dispatch )
+{
+  char seq[] = "\x1b[X;X;X;X'w";
+
+  seq[2] = dispatch->getparam( 0, 0 ) + '0';
+  seq[4] = dispatch->getparam( 1, 0 ) + '0';
+  seq[6] = dispatch->getparam( 2, 0 ) + '0';
+  seq[8] = dispatch->getparam( 3, 0 ) + '0';
+
+  append_str_to_pass_seq(seq, sizeof(seq) - 1);
+  pass_seq_end();
+}
+
+static Function func_CSI_DECEFR( CSI, "'w", CSI_DECEFR);
+
+static void CSI_DECELR( Framebuffer *fb, Dispatcher *dispatch )
+{
+  if (dispatch->param_count() >= 2) {
+    char seq[] = "\x1b[X;X'z";
+
+    seq[2] = dispatch->getparam( 0, 0 ) + '0';
+    seq[4] = dispatch->getparam( 1, 0 ) + '0';
+
+    append_str_to_pass_seq( seq, sizeof(seq) - 1 );
+  } else {
+    char seq[] = "\x1b[X'z";
+
+    seq[2] = dispatch->getparam( 0, 0 ) + '0';
+    append_str_to_pass_seq( seq, sizeof(seq) - 1 );
+  }
+  pass_seq_end();
+}
+
+static Function func_CSI_DECELR( CSI, "'z", CSI_DECELR);
 
 /* erase in line */
 static void CSI_EL( Framebuffer *fb, Dispatcher *dispatch )
