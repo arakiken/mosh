@@ -144,7 +144,7 @@ int tcp_start_server(int *port) {
   for (*port = 8010; *port < 8100; (*port)++) {
     addr.sin_port = htons(*port);
 
-    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
+    if (::bind(sock, (struct sockaddr *)&addr, sizeof(addr)) == 0 &&
 	listen(sock, 1) == 0) {
       return sock;
     }
@@ -462,7 +462,7 @@ bool Connection::try_bind( const char *addr, int port_low, int port_high )
       }
     }
 
-    if ( bind( sock(), &local_addr.sa, local_addr_len ) == 0 ) {
+    if ( ::bind( sock(), &local_addr.sa, local_addr_len ) == 0 ) {
       set_MTU( local_addr.sa.sa_family );
       return true;
     } else if ( i == search_high ) { /* last port to search */
