@@ -90,6 +90,12 @@ Fragment::Fragment( const string &x )
 
 bool FragmentAssembly::add_fragment( Fragment &frag )
 {
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "add_fragment: current id %d new id %d\n", (int)current_id, (int)frag.id);
+  fclose(fp);
+#endif
+
   /* see if this is a totally new packet */
   if ( current_id != frag.id ) {
     fragments.clear();
@@ -167,10 +173,19 @@ vector<Fragment> Fragmenter::make_fragments( const Instruction &inst, size_t MTU
     next_instruction_id++;
   }
 
+	/*
+	 * I don't know why but this assertion causes segmentation fault in some cases
+	 * on arch linux 4.18.6-arch1-1.0.
+	 * #5  0x004afea3 in Network::Fragmenter::make_fragments (this=0x20e68d8,
+   *     inst=..., MTU=1214) at /usr/include/c++/8.2.1/bits/basic_string.h:6047
+   * 6047        operator==(const basic_string<_CharT>& __lhs,
+	 */
+#if 0
   if ( (inst.old_num() == last_instruction.old_num())
        && (inst.new_num() == last_instruction.new_num()) ) {
     assert( inst.diff() == last_instruction.diff() );
   }
+#endif
 
   last_instruction = inst;
   last_MTU = MTU;

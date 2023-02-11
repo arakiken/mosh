@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -37,6 +38,7 @@
 #include <string>
 #include <list>
 
+#include "parserstate.h" /* pass_seq_t */
 #include "network.h"
 #include "transportinstruction.pb.h"
 #include "transportstate.h"
@@ -110,12 +112,16 @@ namespace Network {
 
     uint64_t mindelay_clock; /* time of first pending change to current state */
 
+    pass_seq_t *ps;
+
   public:
     /* constructor */
-    TransportSender( Connection *s_connection, MyState &initial_state );
+    TransportSender( Connection *s_connection, MyState &initial_state, pass_seq_t *_ps );
+
+    void start_remote_tcp_connection( int port );
 
     /* Send data or an ack if necessary */
-    void tick( void );
+    void tick( int *tcp_sock );
 
     /* Returns the number of ms to wait until next possible event. */
     int wait_time( void );

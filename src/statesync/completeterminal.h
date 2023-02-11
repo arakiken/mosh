@@ -75,7 +75,7 @@ namespace Terminal {
 
     /* interface for Network::Transport */
     void subtract( const Complete * ) const {}
-    std::string diff_from( const Complete &existing ) const;
+    std::string diff_from( const Complete &existing, pass_seq_t *ps ) const;
     std::string init_diff( void ) const;
     void apply_string( const std::string & diff );
     bool operator==( const Complete &x ) const;
@@ -83,5 +83,7 @@ namespace Terminal {
     bool compare( const Complete &other ) const;
   };
 }
+
+std::string serialize_string( const char *str );
 
 #endif

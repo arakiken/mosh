@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -64,6 +65,22 @@
 #include "networktransport-impl.h"
 
 using std::wstring;
+
+/* See class STMClient */
+typedef Network::Transport< Network::UserStream, Terminal::Complete > NetworkType;
+typedef shared::shared_ptr< NetworkType > NetworkPointer;
+/* for establish_tcp_connection */
+static NetworkPointer cur_network;
+
+static bool zmodem_on_tcp = false;
+
+void establish_tcp_connection(int port) {
+  if (port <= 0 || cur_network->tcp_sock >= 0) {
+    return;
+  }
+
+  cur_network->tcp_sock = tcp_connect(cur_network->get_remote_addr().sin.sin_addr.s_addr, port);
+}
 
 void STMClient::resume( void )
 {
@@ -190,7 +207,7 @@ void STMClient::init( void )
     wstring escape_pass_name = std::wstring(tmp.begin(), tmp.end());
     tmp = string( escape_key_name_buf );
     wstring escape_key_name = std::wstring(tmp.begin(), tmp.end());
-    escape_key_help = L"Commands: Ctrl-Z suspends, \".\" quits, " + escape_pass_name + L" gives literal " + escape_key_name;
+    escape_key_help = L"Commands: Ctrl-Z suspends, \".\" quits, \".\" resets, " + escape_pass_name + L" gives literal " + escape_key_name;
     overlays.get_notification_engine().set_escape_key_string( tmp );
   }
   wchar_t tmp[ 128 ];
@@ -270,6 +287,32 @@ void STMClient::output_new_frame( void )
     return;
   }
 
+  size_t seq_len;
+  char *seq = pass_seq_get(&network->ps, &seq_len);
+
+  if (seq) {
+    if (!pass_seq_has_zmodem(&network->ps) && memcmp(seq, "\x1bP", 2) == 0) {
+      swrite( STDOUT_FILENO, "\x1b[?8800h", 8 ); /* for DRCS-Sixel */
+    }
+
+#ifdef __DEBUG
+    FILE *fp = fopen("moshlog.txt", "a");
+    fprintf(fp, "Mosh client -> Terminal (len %d)\n", seq_len);
+    for (int i = 0; i < seq_len; i++) {
+      fprintf(fp, "%c", seq[i]);
+    }
+    fprintf(fp, "\n");
+    fclose(fp);
+#endif
+
+    swrite( STDOUT_FILENO, seq, seq_len );
+    pass_seq_reset(&network->ps);
+
+    return;
+  } else if (zmodem_processing(&network->ps)) {
+    return;
+  }
+
   /* fetch target state */
   new_state = network->get_latest_remote_state().state.get_fb();
 
@@ -289,6 +332,8 @@ void STMClient::output_new_frame( void )
 
 void STMClient::process_network_input( void )
 {
+  cur_network = network; /* for establish_tcp_connection() which can be called by network->recv() */
+  cur_ps = &network->ps; /* for network->recv() */
   network->recv();
   
   /* Now give hints to the overlays */
@@ -314,12 +359,50 @@ bool STMClient::process_user_input( int fd )
     return false;
   }
 
+#ifdef __DEBUG
+  FILE *fp = fopen("moshlog.txt", "a");
+  fprintf(fp, "Terminal => Mosh client (len %d)\n", bytes_read);
+  for (int i = 0; i < bytes_read; i++) {
+    fprintf(fp, "%c", buf[i]);
+  }
+  fprintf(fp, "\n");
+  fclose(fp);
+#endif
+
   NetworkType &net = *network;
 
   if ( net.shutdown_in_progress() ) {
     return true;
   }
+
+  /* XXX */
+  bool zmodem_cancel = (strstr(buf, "**\x18\x18\x18\x18\x18\x18\x18\x18"
+			       "\x08\x08\x08\x08\x08\x08\x08\x08\x08\x08") != NULL);
+
+  if (network->tcp_sock >= 0 && tcp_send(network->tcp_sock, buf, bytes_read)) {
+    if (zmodem_cancel) {
+      pass_seq_full_reset(&network->ps);
+
+      if (zmodem_on_tcp) {
+	zmodem_on_tcp = false;
+	closesocket(network->tcp_sock);
+	network->tcp_sock = -1;
+      }
+    }
+
+    return true;
+  } else {
+    if (zmodem_cancel) {
+      pass_seq_full_reset(&network->ps);
+    }
+  }
+
+  pass_seq_change_buf(&network->ps, 1, false);
+
   overlays.get_prediction_engine().set_local_frame_sent( net.get_sent_state_last() );
+
+  /* for overlays.get_prediction_engine().new_user_byte() */
+  cur_ps = &network->ps;
 
   /* Don't predict for bulk data. */
   bool paste = bytes_read > 100;
@@ -334,6 +417,10 @@ bool STMClient::process_user_input( int fd )
       overlays.get_prediction_engine().new_user_byte( the_byte, local_framebuffer );
     }
 
+    if (pass_seq_has_zmodem(&network->ps) || zmodem_processing(&network->ps)) {
+      goto skip;
+    }
+
     if ( quit_sequence_started ) {
       if ( the_byte == '.' ) { /* Quit sequence is Ctrl-^ . */
 	if ( net.has_remote_addr() && (!net.shutdown_in_progress()) ) {
@@ -342,6 +429,8 @@ bool STMClient::process_user_input( int fd )
 	  return true;
 	}
 	return false;
+      } else if ( the_byte == ',') {
+	pass_seq_full_reset(&network->ps);
       } else if ( the_byte == 0x1a ) { /* Suspend sequence is escape_key Ctrl-Z */
 	/* Restore terminal and terminal-driver state */
 	swrite( STDOUT_FILENO, display.close().c_str() );
@@ -391,8 +480,11 @@ bool STMClient::process_user_input( int fd )
       repaint_requested = true;
     }
 
+  skip:
     net.get_current_state().push_back( Parser::UserByte( the_byte ) );		
   }
+
+  pass_seq_change_buf(&network->ps, 0, true);
 
   return true;
 }
@@ -451,13 +543,22 @@ bool STMClient::main( void )
       /* poll for events */
       /* network->fd() can in theory change over time */
       sel.clear_fds();
+
       std::vector< int > fd_list( network->fds() );
-      for ( std::vector< int >::const_iterator it = fd_list.begin();
-	    it != fd_list.end();
-	    it++ ) {
-	sel.add_fd( *it );
+
+      if (!zmodem_on_tcp) {
+	for ( std::vector< int >::const_iterator it = fd_list.begin();
+	      it != fd_list.end();
+	      it++ ) {
+	  sel.add_fd( *it );
+	}
       }
+
       sel.add_fd( STDIN_FILENO );
+
+      if (network->tcp_sock >= 0) {
+	sel.add_fd( network->tcp_sock );
+      }
 
       int active_fds = sel.select( wait_time );
       if ( active_fds < 0 ) {
@@ -466,6 +567,35 @@ bool STMClient::main( void )
       }
 
       bool network_ready_to_read = false;
+
+      if (network->tcp_sock >= 0) {
+	if (sel.read(network->tcp_sock)) {
+	  cur_ps = &network->ps; /* for tcp_recv_from_server */
+	  bool close_socket = !tcp_recv_from_server(network->tcp_sock);
+
+	  if (zmodem_processing(&network->ps)) {
+	    zmodem_on_tcp = true;
+	  } else if (zmodem_on_tcp) {
+	    zmodem_on_tcp = false;
+	    close_socket = true;
+	  }
+
+	  if (close_socket) {
+	    closesocket(network->tcp_sock);
+	    network->tcp_sock = -1;
+	  }
+
+	  goto skip_udp;
+	} else if (zmodem_on_tcp) {
+	  if (!zmodem_processing(&network->ps)) {
+	    zmodem_on_tcp = false;
+	    closesocket(network->tcp_sock);
+	    network->tcp_sock = -1;
+	  }
+
+	  goto skip_udp;
+	}
+      }
 
       for ( std::vector< int >::const_iterator it = fd_list.begin();
 	    it != fd_list.end();
@@ -477,10 +607,17 @@ bool STMClient::main( void )
 	}
       }
 
+      /*
+       * Don't call process_network_input() while reading from network->tcp_sock.
+       * DRCS-Sixel: UTF-8 characters is transfered via UDP while
+       *             DRCS-Sixel sequence is transferred via TCP.
+       *             DRCS-Sixel must be transferred before UTF-8 sequence.
+       */
       if ( network_ready_to_read ) {
 	process_network_input();
       }
-    
+
+    skip_udp:
       if ( sel.read( STDIN_FILENO ) && !process_user_input( STDIN_FILENO ) ) { /* input from the user needs to be fed to the network */
 	if ( !network->has_remote_addr() ) {
 	  break;
@@ -546,7 +683,9 @@ bool STMClient::main( void )
 	overlays.get_notification_engine().set_notification_string( L"" );
       }
 
+      pass_seq_change_buf(&network->ps, 1, false);
       network->tick();
+      pass_seq_change_buf(&network->ps, 0, false);
 
       string & send_error = network->get_send_error();
       if ( !send_error.empty() ) {
@@ -575,6 +714,12 @@ bool STMClient::main( void )
       }
     }
   }
+
+  if (network->tcp_sock >= 0) {
+    closesocket(network->tcp_sock);
+    network->tcp_sock = -1;
+  }
+
   return clean_shutdown;
 }
 

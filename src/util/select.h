@@ -36,7 +36,12 @@
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
+#include "config.h"
+#ifndef USE_WINSOCK
 #include <sys/select.h>
+#else
+#include <winsock2.h>
+#endif
 #include <assert.h>
 
 #include "fatal_assert.h"

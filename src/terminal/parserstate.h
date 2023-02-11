@@ -1,3 +1,4 @@
+/* -*- c-basic-offset:2; tab-width:8 -*- */
 /*
     Mosh: the mobile shell
     Copyright 2012 Keith Winstein
@@ -114,6 +115,51 @@ namespace Parser {
   class SOS_PM_APC_String : public State {
     Transition input_state_rule( wchar_t ch ) const;
   };
+}
+
+extern "C" {
+typedef struct pass_seq {
+  int col_width;
+  int line_height;
+
+  struct state {
+    char *pass_seq;
+    size_t pass_seq_len;
+    char *pass_seq_beg;
+    char *pass_seq_cur;
+    bool pass_seq_ready;
+    char osc_buf[5];
+    int osc_len;
+    char *sixel_chars;
+    int zhdr_stat;
+    int zhdr_left;
+    bool has_zpacket;
+  } s, s_back[2];
+
+  int cur_state_idx;
+  bool processing_zmodem; /* true until ZFIN or Cancel */
+
+} pass_seq_t;
+
+extern pass_seq_t *cur_ps;
+
+void set_window_size(struct winsize ws);
+
+char *sixel_get_chars(void);
+
+void sixel_reset_chars(void);
+
+bool zmodem_processing(pass_seq_t *ps);
+
+char *pass_seq_get(pass_seq_t *ps, size_t *len);
+
+void pass_seq_reset(pass_seq_t *ps);
+
+bool pass_seq_has_zmodem(pass_seq_t *ps);
+
+void pass_seq_change_buf(pass_seq_t *ps, int idx, bool reset_cur_state);
+
+void pass_seq_full_reset(pass_seq_t *ps);
 }
 
 #endif
