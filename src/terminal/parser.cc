@@ -151,7 +151,7 @@ invalid:
 }
 
 /* Avoid error by -Werror=missing-declarations */
-size_t convert_utf8_to_ucs(unsigned int *ucs_ch, unsigned char *utf8_ch, size_t len);
+size_t convert_ucs_to_utf8(unsigned char *utf8, size_t len, unsigned int ucs_ch);
 
 /*
  * Return value
