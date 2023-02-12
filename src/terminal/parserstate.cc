@@ -224,7 +224,7 @@ static char* drcs_sixel_from_data(char *sixel, /* DCS P1;P2;P3;q...ST */ size_t 
 }
 
 static int check_pass_seq_len(size_t len) {
-  static int max_pass_seq_len = 0;
+  static size_t max_pass_seq_len = 0;
 
   if (cur_ps->s.pass_seq_len >= cur_ps->s.pass_seq_cur - cur_ps->s.pass_seq + len) {
     return 1;
@@ -259,6 +259,9 @@ static int check_pass_seq_len(size_t len) {
   return 1;
 }
 
+/* Avoid error by -Werror=missing-declarations */
+void append_str_to_pass_seq(const char *seq, size_t len);
+
 void append_str_to_pass_seq(const char *seq, size_t len) {
   if (check_pass_seq_len(len)) {
     cur_ps->s.pass_seq_cur = (char*)memcpy(cur_ps->s.pass_seq_cur, seq, len) + len;
@@ -272,6 +275,9 @@ static void append_char_to_pass_seq(char ch) {
 }
 
 void establish_tcp_connection(int port);
+
+/* Avoid error by -Werror=missing-declarations */
+void pass_seq_end(void);
 
 void pass_seq_end(void) {
   cur_ps->s.pass_seq_beg = cur_ps->s.pass_seq_cur;
