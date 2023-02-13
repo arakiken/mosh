@@ -50,11 +50,9 @@ Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState 
     last_receiver_state( initial_remote ),
     fragments(),
     verbose( 0 ),
-    tcp_sock( -1 )
-{
-  /* server */
-  memset(&ps, 0, sizeof(ps));
-}
+    tcp_sock( -1 ),
+    ps{}
+{}
 
 template <class MyState, class RemoteState>
 Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState &initial_remote,
@@ -66,11 +64,9 @@ Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState 
     last_receiver_state( initial_remote ),
     fragments(),
     verbose( 0 ),
-    tcp_sock( -1 )
-{
-  /* client */
-  memset(&ps, 0, sizeof(ps));
-}
+    tcp_sock( -1 ),
+    ps{}
+{}
 
 static bool tcp_recv_from_server(int sock) {
   char buf[4096];
