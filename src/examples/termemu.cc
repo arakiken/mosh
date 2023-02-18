@@ -73,6 +73,7 @@ const size_t buf_size = 16384;
 static void emulate_terminal( int fd );
 
 /* dummy implementation for transportsender-impl.h */
+void establish_tcp_connection(int port);
 void establish_tcp_connection(int port) {}
 
 int main( int argc, char *argv[] )
