@@ -66,6 +66,9 @@ static void emulate_terminal( int fd );
 static int copy( int src, int dest );
 static int vt_parser( int fd, Parser::UTF8Parser *parser );
 
+/* dummy implementation for transportsender-impl.h */
+void establish_tcp_connection(int port) {}
+
 int main( int argc __attribute__((unused)),
 	  char *argv[] __attribute__((unused)),
 	  char *envp[] )

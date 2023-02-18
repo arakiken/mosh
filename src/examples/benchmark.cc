@@ -63,6 +63,9 @@ const int ITERATIONS = 100000;
 
 using namespace Terminal;
 
+/* dummy implementation for transportsender-impl.h */
+void establish_tcp_connection(int port) {}
+
 int main( int argc, char **argv )
 {
   try {
