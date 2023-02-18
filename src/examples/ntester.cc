@@ -42,6 +42,9 @@
 
 using namespace Network;
 
+/* dummy implementation for transportsender-impl.h */
+void establish_tcp_connection(int port) {}
+
 int main( int argc, char *argv[] )
 {
   bool server = true;
