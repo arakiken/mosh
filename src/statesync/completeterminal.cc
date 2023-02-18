@@ -281,6 +281,12 @@ bool Complete::compare( const Complete &other ) const
   return ret;
 }
 
+/*
+ * Declaration is not placed in completeterminal.h, because serialize_string()
+ * can be used in *-impl.h which doesn't include completeterminal.h.
+ */
+std::string serialize_string( const char *str );
+
 std::string serialize_string( const char *str )
 {
   HostBuffers::HostMessage output;
