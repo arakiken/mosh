@@ -84,6 +84,4 @@ namespace Terminal {
   };
 }
 
-std::string serialize_string( const char *str );
-
 #endif

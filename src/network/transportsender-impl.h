@@ -151,6 +151,9 @@ int TransportSender<MyState>::wait_time( void )
   }
 }
 
+/* See completeterminal.h */
+std::string serialize_string( const char *str );
+
 template <class MyState>
 void TransportSender<MyState>::start_remote_tcp_connection( int port )
 {
