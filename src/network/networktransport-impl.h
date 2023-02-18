@@ -68,6 +68,7 @@ Transport<MyState, RemoteState>::Transport( MyState &initial_state, RemoteState 
     ps{}
 {}
 
+#ifdef USE_TCP_RECV_FROM_SERVER
 static bool tcp_recv_from_server(int sock) {
   char buf[4096];
   ssize_t len = recv(sock, buf, sizeof(buf), 0);
@@ -109,6 +110,7 @@ static bool tcp_recv_from_server(int sock) {
 
   return true;
 }
+#endif
 
 template <class MyState, class RemoteState>
 void Transport<MyState, RemoteState>::recv( void )

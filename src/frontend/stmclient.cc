@@ -62,6 +62,7 @@
 #include "select.h"
 #include "timestamp.h"
 
+#define USE_TCP_RECV_FROM_SERVER
 #include "networktransport-impl.h"
 
 using std::wstring;
