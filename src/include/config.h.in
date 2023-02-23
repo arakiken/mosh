@@ -65,6 +65,11 @@
 /* Define if you have forkpty(). */
 #undef HAVE_FORKPTY
 
+/* XXX */
+#ifndef HAVE_FORKPTY
+#define USE_WINSOCK
+#endif
+
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
