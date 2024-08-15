@@ -168,7 +168,7 @@ void TransportSender<MyState>::start_remote_tcp_connection( int port )
   send_to_receiver(serialize_string(seq));
 }
 
-static bool tcp_send(int tcp_sock, char *buf, size_t len)
+static bool tcp_send(int tcp_sock, const char *buf, size_t len)
 {
   size_t sent = 0;
 
