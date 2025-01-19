@@ -23,8 +23,8 @@ AS_IF([test x"$PROTOC" = x],
 m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 
 # Protobuf 3.6+ requires C++11.
-AS_IF([pkg-config --atleast-version 3.6.0 protobuf],
-  [AX_CXX_COMPILE_STDCXX([11])])
+#AS_IF([pkg-config --atleast-version 3.6.0 protobuf],
+#  [AX_CXX_COMPILE_STDCXX([11])])
 
 WARNING_CXXFLAGS=""
 PICKY_CXXFLAGS=""
