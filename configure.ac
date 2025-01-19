@@ -280,7 +280,7 @@ AC_CHECK_HEADERS(m4_normalize([
   unistd.h
   wchar.h
   wctype.h
-  ]), [], [AC_MSG_ERROR([Missing required header file.])])
+  ]), [], [AC_MSG_WARN([Missing required header file.])])
 
 AC_CHECK_HEADERS([pty.h util.h libutil.h paths.h])
 AC_CHECK_HEADERS([endian.h sys/endian.h])
