@@ -603,7 +603,7 @@ string Connection::recv( void *ps )
     } catch ( NetworkException & e ) {
       if (
 #ifdef USE_WINSOCK
-           WSAGetLastError() == WSAEWOULDBLOCK ||
+           (e.the_errno == WSAEWOULDBLOCK) ||
 #endif
            (e.the_errno == EAGAIN)
 	   || (e.the_errno == EWOULDBLOCK) ) {
@@ -686,15 +686,14 @@ string Connection::recv_one( int sock_to_recv )
   if ( !func &&
        WSAIoctl( sock_to_recv, SIO_GET_EXTENSION_FUNCTION_POINTER,
                  &guid, sizeof(guid), &func, sizeof(func), &nbytes, NULL, NULL ) == SOCKET_ERROR ) {
-    throw NetworkException( "WSAIoctl", 1 );
+    throw NetworkException( "WSAIoctl", WSAGetLastError() );
   }
 
   DWORD received_len;
   u_long val = 1;
   ioctlsocket(sock_to_recv, FIONBIO, &val);
-  while ( (*func)( sock_to_recv, &header, &received_len, NULL, NULL ) == SOCKET_ERROR ||
-       received_len < 0 ) {
-    throw NetworkException( "WSARecvMsg", 1 );
+  while ( (*func)( sock_to_recv, &header, &received_len, NULL, NULL ) == SOCKET_ERROR ) {
+    throw NetworkException( "WSARecvMsg", WSAGetLastError() );
   }
   val = 0;
   ioctlsocket(sock_to_recv, FIONBIO, &val);
